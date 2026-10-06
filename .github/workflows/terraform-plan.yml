@@ -57,12 +57,12 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
         with:
-          role-to-assume: arn:aws:iam::${{ steps.resolve.outputs.aws_account_id }}:role/VerifyPolicy-GithubAction
+          role-to-assume: arn:aws:iam::151062089420:role/VerifyPolicy-GithubAction
           aws-region: ap-northeast-1
 
       - name: Terraform Init
         id: init
-        working-directory: terraform/environments/${{ steps.resolve.outputs.tf_env }}
+        working-directory: terraform/environments/dev
         run: terraform init 2>&1
         continue-on-error: true
 
@@ -70,12 +70,12 @@ jobs:
         if: steps.init.outcome == 'failure'
         run: |
           echo "::error::Terraform Init Failed"
-          echo "Working directory: terraform/environments/${{ steps.resolve.outputs.tf_env }}"
+          echo "Working directory: terraform/environments/dev"
           ls -la
 
       - name: Terraform Validate
         id: validate
-        working-directory: terraform/environments/${{ steps.resolve.outputs.tf_env }}
+        working-directory: terraform/environments/dev
         run: terraform validate 2>&1
         continue-on-error: true
 
@@ -83,12 +83,12 @@ jobs:
         if: steps.validate.outcome == 'failure'
         run: |
           echo "::error::Terraform Validate Failed"
-          cd terraform/environments/${{ steps.resolve.outputs.tf_env }}
+          cd terraform/environments/dev
           terraform validate
 
       - name: Terraform Plan
         id: plan
-        working-directory: terraform/environments/${{ steps.resolve.outputs.tf_env }}
+        working-directory: terraform/environments/dev
         run: |
           PLAN_FILE="plan_output_pr${{ github.event.pull_request.number }}_run${{ github.run_id }}.txt"
           echo "plan_file=$PLAN_FILE" >> "$GITHUB_OUTPUT"
