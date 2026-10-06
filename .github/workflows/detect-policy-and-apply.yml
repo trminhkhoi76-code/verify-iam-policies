@@ -1,0 +1,96 @@
+name: detect-policy-and-apply
+
+on:
+  workflow_call:
+    inputs:
+      account_id:
+        description: AWS account ID for the target environment (dev or prod).
+        required: true
+        type: string
+      target_role_name:
+        description: IAM role name whose inline policy will be updated.
+        required: true
+        type: string
+    outputs:
+      status:
+        description: Final status of the workflow (success, skipped, error).
+        value: ${{ jobs.detect_and_apply.outputs.status }}
+      terraform_changed:
+        description: Whether terraform/** changed in this PR ('true'/'false').
+        value: ${{ jobs.detect_and_apply.outputs.terraform_changed }}
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+
+jobs:
+  detect_and_apply:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.skip.outputs.status || (steps.apply.outcome == 'success' && 'success') || 'error' }}
+      terraform_changed: ${{ steps.detect.outputs.terraform }}
+    env:
+      ACCOUNT_ID: ${{ inputs.account_id }}
+      TARGET_ROLE_NAME: ${{ inputs.target_role_name }}
+      POLICY_PATH: .github/iam/terraform-deploy-policy.json
+      POLICY_NAME: terraform-deploy-policy
+      AWS_REGION: ap-northeast-1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4
+
+      - name: Detect changes
+        id: detect
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3
+        with:
+          filters: |
+            policy:
+              - '.github/iam/terraform-deploy-policy.json'
+            terraform:
+              - 'terraform/**'
+
+      - name: Skip if no changes
+        id: skip
+        if: steps.detect.outputs.policy != 'true'
+        run: |
+          echo "status=skipped" >> "$GITHUB_OUTPUT"
+          echo "::notice::Policy file has not changed. Skipping update."
+
+      - name: Configure AWS credentials via Heatmap-Policy-Manager
+        if: steps.detect.outputs.policy == 'true'
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/Heatmap-Policy-Manager
+          role-session-name: detect-policy-and-apply
+
+      - name: Validate policy JSON
+        if: steps.detect.outputs.policy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, sys
+          path = os.environ["POLICY_PATH"]
+          try:
+              with open(path, "r", encoding="utf-8") as f:
+                  json.load(f)
+              print(f"✅ Valid JSON: {path}")
+          except Exception as e:
+              print(f"❌ Invalid JSON: {e}", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Apply policy to target role
+        id: apply
+        if: steps.detect.outputs.policy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws iam put-role-policy \
+            --role-name "$TARGET_ROLE_NAME" \
+            --policy-name "$POLICY_NAME" \
+            --policy-document "file://$GITHUB_WORKSPACE/$POLICY_PATH"
+          echo "✅ Policy '$POLICY_NAME' applied to role '$TARGET_ROLE_NAME' successfully."

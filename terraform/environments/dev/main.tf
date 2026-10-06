@@ -1,15 +1,6 @@
 # ================================================================
 # Dev / IAM policy verification stack
 # ================================================================
-# One instance of every resource type the Heatmap Japan stack manages,
-# each in the variant that needs the most permissions (VPC Lambda with its
-# own SG + ingress rules, Valkey with custom parameter group + slow-log
-# delivery + alarms, ECS behind a dedicated ALB with auto scaling, task role
-# with every optional managed policy, ...). A successful plan/apply/destroy
-# under the deploy role proves .github/iam/terraform-deploy-policy.json
-# covers the whole stack. Modules are called directly (not through the root
-# module, which always creates duplicates such as two Valkey clusters).
-# ================================================================
 
 terraform {
   required_version = ">= 1.8.0"
@@ -87,15 +78,21 @@ variable "existing_security_group_ids" {
 
 data "aws_caller_identity" "current" {}
 
-data "aws_vpc" "this" {
-  id      = var.vpc_id
-  default = var.vpc_id == null ? true : null
+# aws_vpcs / aws_subnet(s) only call ec2:DescribeVpcs / ec2:DescribeSubnets.
+# (data "aws_vpc" also calls ec2:DescribeVpcAttribute, which the real stack never needs.)
+data "aws_vpcs" "default" {
+  count = var.vpc_id == null ? 1 : 0
+
+  filter {
+    name   = "is-default"
+    values = ["true"]
+  }
 }
 
 data "aws_subnets" "public" {
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.this.id]
+    values = [local.vpc_id]
   }
   filter {
     name   = "map-public-ip-on-launch"
@@ -103,8 +100,13 @@ data "aws_subnets" "public" {
   }
 }
 
+data "aws_subnet" "public" {
+  for_each = toset(data.aws_subnets.public.ids)
+  id       = each.value
+}
+
 data "aws_security_group" "vpc_default" {
-  vpc_id = data.aws_vpc.this.id
+  vpc_id = local.vpc_id
   name   = "default"
 }
 
@@ -115,9 +117,9 @@ locals {
   project_name  = "heatmap-japan"
   tags          = {}
 
-  vpc_id            = data.aws_vpc.this.id
-  vpc_cidr_blocks   = [data.aws_vpc.this.cidr_block]
+  vpc_id            = coalesce(var.vpc_id, one(flatten(data.aws_vpcs.default[*].ids)))
   public_subnet_ids = sort(data.aws_subnets.public.ids)
+  vpc_cidr_blocks   = sort([for s in data.aws_subnet.public : s.cidr_block]) # subnet CIDRs, as in the original dev config
   rds_sg_id         = coalesce(var.existing_security_group_ids.rds, data.aws_security_group.vpc_default.id)
   smg_sg_id         = coalesce(var.existing_security_group_ids.secrets_manager_endpoint, data.aws_security_group.vpc_default.id)
 

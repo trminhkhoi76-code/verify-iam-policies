@@ -1,0 +1,196 @@
+name: Terraform Apply And Deploy
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    types:
+      - closed
+    paths:
+      - 'terraform/**'
+      # The CDN state is planned/applied manually with an approval gate
+      # (terraform/cdn/README.md); this workflow only covers environments/*.
+      - '!terraform/cdn/**'
+      # This workflow deliberately does NOT list its own path. A positive match
+      # here overrides the exclusion above, so a PR that touches only
+      # terraform/cdn/** plus this file would still run an unattended
+      # `terraform apply -auto-approve` against an environments state it never
+      # changed. Editing this file is not a reason to apply infrastructure.
+      # Dev/test: only one Lambda is built and deployed (see detect-lambda-changes).
+      - 'HeatmapJapanCronServerless/CheckLimit/Lambda/**'
+      # The GithubAction deploy role's inline policy lives outside Terraform
+      # state (it's the role Terraform itself assumes), so it's synced via
+      # detect-policy-and-apply.yml instead of a terraform apply.
+      - '.github/iam/terraform-deploy-policy.json'
+
+jobs:
+  detect-lambda-changes:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      has_lambda_changes: ${{ steps.filter.outputs.lambda }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # Dev/test: a single Lambda is enough to prove the build + deploy path
+      # (UpdateFunctionCode / PublishVersion / UpdateAlias) under the deploy role.
+      - name: Detect Lambda changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            lambda:
+              - 'HeatmapJapanCronServerless/CheckLimit/Lambda/**'
+
+  resolve-environment:
+    if: >-
+      github.event.pull_request.merged == true &&
+      ((github.base_ref == 'develop') || (github.base_ref == 'main'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      environment: ${{ steps.resolve.outputs.tf_env }}
+      aws-account-id: ${{ steps.resolve.outputs.aws_account_id }}
+    steps:
+      - name: Resolve AWS account by branch
+        id: resolve
+        shell: bash
+        run: |
+          ref_name="${{ github.base_ref }}"
+          
+          # Determine environment based on branch
+          if [[ "$ref_name" == "main" ]]; then
+            echo "tf_env=prod" >> "$GITHUB_OUTPUT"
+            echo "aws_account_id=151062089420" >> "$GITHUB_OUTPUT"
+          elif [[ "$ref_name" == "develop" ]]; then
+            echo "tf_env=dev" >> "$GITHUB_OUTPUT"
+            echo "aws_account_id=151062089420" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unsupported branch: $ref_name" >&2
+            exit 1
+          fi
+          
+          # Log branch for debugging
+          echo "Branch: $ref_name" >> $GITHUB_STEP_SUMMARY
+
+  detect-policy:
+    needs: resolve-environment
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    uses: ./.github/workflows/detect-policy-and-apply.yml
+    with:
+      account_id: ${{ needs.resolve-environment.outputs.aws-account-id }}
+      target_role_name: VerifyPolicy-GithubAction
+
+  apply-terraform:
+    needs:
+      - resolve-environment
+      - detect-policy
+    if: needs.detect-policy.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: ${{ needs.resolve-environment.outputs.environment }}
+      url: https://console.aws.amazon.com/
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ needs.resolve-environment.outputs.aws-account-id }}:role/VerifyPolicy-GithubAction
+          aws-region: ap-northeast-1
+
+      - name: Terraform Init
+        if: needs.detect-policy.outputs.terraform_changed == 'true'
+        working-directory: terraform/environments/${{ needs.resolve-environment.outputs.environment }}
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        if: needs.detect-policy.outputs.terraform_changed == 'true'
+        working-directory: terraform/environments/${{ needs.resolve-environment.outputs.environment }}
+        shell: bash
+        run: |
+          set +e  # Disable exit on error for entire script
+          PLAN_FILE="plan_output_run${{ github.run_id }}.txt"
+
+          # Run terraform plan and capture exit code (0=no changes, 2=changes, 1=error)
+          terraform plan -detailed-exitcode -no-color -out=tfplan
+          PLAN_EXIT=$?
+
+          echo "Plan exit code: $PLAN_EXIT"
+
+          if [ $PLAN_EXIT -eq 1 ]; then
+            echo "terraform plan failed"
+            exit 1
+          fi
+
+          if [ $PLAN_EXIT -eq 2 ]; then
+            echo "Changes detected in terraform plan"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No changes detected"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Show the plan output
+          terraform show -no-color tfplan > "$PLAN_FILE" 2>&1 || true
+          echo "plan_file=$PLAN_FILE" >> "$GITHUB_OUTPUT"
+
+          # Display plan output for debugging
+          echo "=== Terraform Plan Output ==="
+          cat "$PLAN_FILE"
+
+      - name: Debug Plan Output
+        if: always()
+        shell: bash
+        run: |
+          echo "has_changes output: ${{ steps.plan.outputs.has_changes }}"
+          echo "plan_file output: ${{ steps.plan.outputs.plan_file }}"
+
+      - name: Upload Terraform Plan
+        if: steps.plan.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: terraform/environments/${{ needs.resolve-environment.outputs.environment }}/tfplan
+
+      - name: Terraform Apply
+        if: steps.plan.outputs.has_changes == 'true'
+        working-directory: terraform/environments/${{ needs.resolve-environment.outputs.environment }}
+        run: terraform apply -auto-approve tfplan
+
+  deploy-lambda:
+    needs:
+      - detect-lambda-changes
+      - resolve-environment
+      - apply-terraform
+    permissions:
+      id-token: write
+      contents: read
+    if: needs.apply-terraform.result == 'success' && needs.detect-lambda-changes.outputs.has_lambda_changes == 'true'
+    uses: ./.github/workflows/deploy-lambda-reusable.yml
+    with:
+      lambda-function-name: CheckLimit
+      lambda-dir: HeatmapJapanCronServerless/CheckLimit/Lambda
+      aws-account-id: ${{ needs.resolve-environment.outputs.aws-account-id }}
+      github-oidc-role: VerifyPolicy-GithubAction
