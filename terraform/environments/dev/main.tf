@@ -1,15 +1,6 @@
 # ================================================================
 # Dev / IAM policy verification stack
 # ================================================================
-# One instance of every resource type the Heatmap Japan stack manages,
-# each in the variant that needs the most permissions (VPC Lambda with its
-# own SG + ingress rules, Valkey with custom parameter group + slow-log
-# delivery + alarms, ECS behind a dedicated ALB with auto scaling, task role
-# with every optional managed policy, ...). A successful plan/apply/destroy
-# under the deploy role proves .github/iam/terraform-deploy-policy.json
-# covers the whole stack. Modules are called directly (not through the root
-# module, which always creates duplicates such as two Valkey clusters).
-# ================================================================
 
 terraform {
   required_version = ">= 1.8.0"
