@@ -1,0 +1,27 @@
+# Scheduler support (EventBridge Scheduler)
+resource "aws_scheduler_schedule" "this" {
+  name                         = "${var.project_name}-${var.name}"
+  description                  = var.description
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  schedule_expression          = var.schedule_expression
+  schedule_expression_timezone = var.schedule_expression_timezone
+  state                        = var.enabled ? "ENABLED" : "DISABLED"
+
+  target {
+    arn      = var.target.type == "lambda" && var.target.alias != null ? "${var.target.arn}:${var.target.alias}" : var.target.arn
+    role_arn = var.scheduler_role_arn
+    input    = var.target.input != null ? jsonencode(var.target.input) : null
+
+    dynamic "retry_policy" {
+      for_each = var.retry_policy != null ? [1] : []
+      content {
+        maximum_retry_attempts       = var.retry_policy.maximum_retry_attempts
+        maximum_event_age_in_seconds = var.retry_policy.maximum_event_age_in_seconds
+      }
+    }
+  }
+}
