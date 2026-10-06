@@ -78,15 +78,21 @@ variable "existing_security_group_ids" {
 
 data "aws_caller_identity" "current" {}
 
-data "aws_vpc" "this" {
-  id      = var.vpc_id
-  default = var.vpc_id == null ? true : null
+# aws_vpcs / aws_subnet(s) only call ec2:DescribeVpcs / ec2:DescribeSubnets.
+# (data "aws_vpc" also calls ec2:DescribeVpcAttribute, which the real stack never needs.)
+data "aws_vpcs" "default" {
+  count = var.vpc_id == null ? 1 : 0
+
+  filter {
+    name   = "is-default"
+    values = ["true"]
+  }
 }
 
 data "aws_subnets" "public" {
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.this.id]
+    values = [local.vpc_id]
   }
   filter {
     name   = "map-public-ip-on-launch"
@@ -94,8 +100,13 @@ data "aws_subnets" "public" {
   }
 }
 
+data "aws_subnet" "public" {
+  for_each = toset(data.aws_subnets.public.ids)
+  id       = each.value
+}
+
 data "aws_security_group" "vpc_default" {
-  vpc_id = data.aws_vpc.this.id
+  vpc_id = local.vpc_id
   name   = "default"
 }
 
@@ -106,9 +117,9 @@ locals {
   project_name  = "heatmap-japan"
   tags          = {}
 
-  vpc_id            = data.aws_vpc.this.id
-  vpc_cidr_blocks   = [data.aws_vpc.this.cidr_block]
+  vpc_id            = coalesce(var.vpc_id, one(flatten(data.aws_vpcs.default[*].ids)))
   public_subnet_ids = sort(data.aws_subnets.public.ids)
+  vpc_cidr_blocks   = sort([for s in data.aws_subnet.public : s.cidr_block]) # subnet CIDRs, as in the original dev config
   rds_sg_id         = coalesce(var.existing_security_group_ids.rds, data.aws_security_group.vpc_default.id)
   smg_sg_id         = coalesce(var.existing_security_group_ids.secrets_manager_endpoint, data.aws_security_group.vpc_default.id)
 

@@ -5,13 +5,13 @@
       "Sid": "TfStateList",
       "Effect": "Allow",
       "Action": "s3:ListBucket",
-      "Resource": ["arn:aws:s3:::faber-terraform-state-develop","arn:aws:s3:::faber-terraform-state-production"]
+      "Resource": ["arn:aws:s3:::verrify-terraform-state-develop","arn:aws:s3:::faber-terraform-state-production"]
     },
     {
       "Sid": "TfStateRW",
       "Effect": "Allow",
       "Action": ["s3:GetObject","s3:PutObject"],
-      "Resource": ["arn:aws:s3:::faber-terraform-state-develop/heatmap-japan/*","arn:aws:s3:::faber-terraform-state-production/heatmap-japan/*"]
+      "Resource": ["arn:aws:s3:::verrify-terraform-state-develop/heatmap-japan/*","arn:aws:s3:::faber-terraform-state-production/heatmap-japan/*"]
     },
     {
       "Sid": "TfStateLock",
@@ -22,7 +22,7 @@
         "dynamodb:PutItem",
         "dynamodb:DeleteItem"
       ],
-      "Resource": "arn:aws:dynamodb:ap-northeast-1:*:table/faber-terraform-lock"
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:*:table/verify-terraform-lock"
     },
     {
       "Sid": "TfStateKmsIfSseKms",
@@ -53,7 +53,8 @@
         "cloudwatch:DescribeAlarms",
         "logs:DescribeLogGroups",
         "ecr:GetAuthorizationToken",
-        "states:ListStateMachines"
+        "states:ListStateMachines",
+        "states:ValidateStateMachineDefinition"
       ],
       "Resource": "*",
       "Condition": {"StringEquals":{"aws:RequestedRegion":["ap-northeast-1","us-east-1"]}}
@@ -148,7 +149,7 @@
       "Sid": "Ec2CreateSgInKnownVpcs",
       "Effect": "Allow",
       "Action": "ec2:CreateSecurityGroup",
-      "Resource": ["arn:aws:ec2:ap-northeast-1:*:vpc/vpc-06b9f7c3aaf0a5e27","arn:aws:ec2:ap-northeast-1:*:vpc/vpc-208b8042"]
+      "Resource": ["arn:aws:ec2:ap-northeast-1:*:vpc/vpc-0e73fb9db193eef69"]
     },
     {
       "Sid": "Ec2SecurityGroups",

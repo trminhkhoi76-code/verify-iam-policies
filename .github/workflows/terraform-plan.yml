@@ -75,6 +75,7 @@ jobs:
 
       - name: Terraform Validate
         id: validate
+        if: steps.init.outcome == 'success'
         working-directory: terraform/environments/dev
         run: terraform validate 2>&1
         continue-on-error: true
@@ -88,6 +89,7 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        if: steps.validate.outcome == 'success'
         working-directory: terraform/environments/dev
         run: |
           PLAN_FILE="plan_output_pr${{ github.event.pull_request.number }}_run${{ github.run_id }}.txt"
