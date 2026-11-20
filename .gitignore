@@ -1,0 +1,28 @@
+# Terraform initialization and providers
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.plan
+*.tfplan.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.tfstate.lock.info
+
+# Sensitive local inputs. Commit *.example files instead.
+*.auto.tfvars
+*.auto.tfvars.json
+terraform.tfvars
+terraform.tfvars.json
+.env
+.env.*
+!.env.example
+
+# Generated logs and evidence
+*.log
+__pycache__/
+.DS_Store
