@@ -1,138 +1,42 @@
-# HeatmapJapan Terraform Infrastructure
+# Heatmap Japan — IAM permission verification Terraform
 
-Terraform infrastructure for HeatmapJapan project with dev and prod environments.
+**Status: AWS-capable verification fixture, NOT a verified production deployment.**
 
-## Directory Structure
+The repository contains a copy/reference configuration of Heatmap Japan infrastructure under `terraform/`, reusable real AWS resource modules in `modules/`, and a targeted `environments/dev/` verification root. The latter assembles many resource variants to exercise permissions used by the deployment role.
 
-```
+## Current repository layout
+
+```text
 terraform/
-├── modules/
-│   └── valkey/             # Valkey (Redis) module
-├── environments/           # Environment configurations
-│   ├── dev/               # Development environment
-│   └── prod/             # Production environment
-├── main.tf              # Main Terraform file
-├── variables.tf        # Variable definitions
-└── outputs.tf         # Output values
+├── main.tf, variables.tf, outputs.tf  # broad reference root configuration
+├── environments/
+│   └── dev/
+│       ├── backend.tf                 # AWS S3 backend; account-specific
+│       ├── main.tf                    # test resource coverage against a real AWS account
+│       └── outputs.tf
+└── modules/                            # real Terraform modules; not mocks
 ```
 
-## Prerequisites
+There is **no** `environments/prod/` in the checked `main` tree. Earlier setup instructions describing prod deployment, Valkey monthly costs and a different S3 state bucket do not match this snapshot and must not be used as an operational runbook.
 
-- **Terraform** >= 1.5
-- **AWS CLI** configured
-- **AWS permissions** for EC2, VPC, ElastiCache
-
-## Quick Setup
-
-### 1. Create Backend Resources (One-time setup)
-
-Create S3 buckets for state storage:
+## Safe static validation (without AWS credentials)
 
 ```bash
-# Dev environment
-aws s3 mb s3://faber-terraform-state-develop --region ap-northeast-1
-aws s3api put-bucket-versioning --bucket faber-terraform-state-develop --versioning-configuration Status=Enabled
-
-# Prod environment  
-aws s3 mb s3://faber-terraform-state-production --region ap-northeast-1
-aws s3api put-bucket-versioning --bucket faber-terraform-state-production --versioning-configuration Status=Enabled
+terraform fmt -check -recursive terraform
+terraform -chdir=terraform/environments/dev init -backend=false -input=false
+terraform -chdir=terraform/environments/dev validate
 ```
 
-Create DynamoDB table for state locking (shared):
+`-backend=false` avoids contacting the configured S3 state backend. Terraform may still download public providers/modules as part of initialization. Do not confuse this with `terraform plan`: the latter may access AWS, state and data sources.
 
-```bash
-# Shared state locking table for all environments
-aws dynamodb create-table \
-  --table-name faber-terraform-lock \
-  --attribute-definitions AttributeName=LockID,AttributeType=S \
-  --key-schema AttributeName=LockID,KeyType=HASH \
-  --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
-  --region ap-northeast-1
-```
+## Controlled real verification
 
-### 2. Deploy Dev Environment
+`environments/dev/main.tf` contains AWS data sources and resources for IAM coverage tests (including ECS, Lambda and Valkey variants). The backend is configured for a specific test environment. **Do not assume that backend, AWS account, and privileges are safe just because they are labelled dev.**
 
-```bash
-cd environments/dev
-terraform init
-terraform plan -out="terraform.dev.plan"
-terraform apply "terraform.dev.plan"
-```
+Before `plan`, `apply` or `destroy`: obtain an isolated test account, explicit change approval, verified role identity, dedicated remote state, resource inventory, cleanup plan and cost budget. Keep AWS run links, exact Terraform plan, CloudTrail/role evidence and cleanup evidence. Passing a plan alone is not proof of all `apply` permissions.
 
-### 3. Deploy Prod Environment
+## Generated artifacts
 
-```bash
-cd environments/prod
-terraform init
-terraform plan -out="terraform.prod.plan"
-terraform apply "terraform.prod.plan"
-```
+The Lambda module uses `archive_file` to generate a placeholder zip at `modules/lambda-functions/.terraform/dummy.zip`. It is build output, not maintainable source. The previously committed zip is removed from version control and ignored; it can be generated when Terraform evaluates the archive data source.
 
-## Valkey Configuration
-
-### Dev Environment
-- **Instance**: cache.t4g.micro (smallest ARM-based)
-- **Memory**: 0.555GB RAM
-- **Nodes**: 1 (single node for cost savings)
-- **Multi-AZ**: Disabled
-- **Encryption**: Disabled (for simplicity)
-- **Backup**: 1-day retention
-
-### Prod Environment  
-- **Instance**: cache.t4g.small (cost-effective for 1GB data)
-- **Memory**: 1.37GB RAM per node
-- **Nodes**: 2 (primary + replica for HA)
-- **Multi-AZ**: Enabled
-- **Encryption**: Disabled (for simplicity)
-- **Backup**: 7-day retention
-
-## Get Connection Info
-
-After deployment:
-
-```bash
-terraform output valkey_endpoint
-terraform output valkey_port
-```
-
-## Estimated Costs (Monthly)
-
-- **Dev**: ~$12/month (cache.t4g.micro single node)
-- **Prod**: ~$24/month (cache.t4g.small 2 nodes)
-- **Total**: ~$36/month for both environments
-
-**Note**: Uses existing VPC infrastructure, no additional NAT Gateway costs.
-
-## Accessing Valkey/Redis
-
-### From EC2 Instance (Both Environments)
-```bash
-# SSH to EC2 instance in same VPC
-ssh ec2-user@your-ec2-instance
-
-# Install redis-cli if not available
-sudo yum install redis -y
-# or for Ubuntu
-sudo apt-get install redis-tools -y
-
-# Connect to Valkey (simple connection for both dev and prod)
-redis-cli -h <valkey_endpoint> -p 6379
-
-# Test connection
-> ping
-PONG
-```
-
-## Security
-
-- State files stored in encrypted S3 buckets with versioning
-- DynamoDB state locking enabled
-- Valkey encryption disabled (both environments for simplicity)
-- Security groups restrict access to EC2 instances only
-- Default tags applied automatically via provider configuration
-- **Network isolation**: Both environments protected by VPC security groups
-- **Access control**: Only authorized EC2 instances can connect
-
-## Support
-
-For infrastructure issues, contact the DevOps team.
+See [safety](../docs/SAFETY.md) and [evidence classification](../docs/VERIFICATION_MATRIX.md).

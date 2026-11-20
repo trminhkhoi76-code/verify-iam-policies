@@ -1,0 +1,31 @@
+name: "Terraform static verification (no AWS)"
+
+# Opt-in only; no AWS credentials, no remote backend, no plan/apply/destroy.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-validate:
+    name: "STATIC - Terraform fmt and validate"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: Check Terraform source formatting
+        run: terraform fmt -check -recursive terraform
+      - name: Initialize dev root without state backend
+        run: terraform -chdir=terraform/environments/dev init -backend=false -input=false
+      - name: Validate dev root (no AWS credentials)
+        run: terraform -chdir=terraform/environments/dev validate
+      - name: Evidence classification
+        if: always()
+        run: |
+          echo "## STATIC ONLY" >> "$GITHUB_STEP_SUMMARY"
+          echo "No AWS credentials, remote Terraform state, plan, apply or destroy used." >> "$GITHUB_STEP_SUMMARY"
